@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>
         <PackageId>fennecs</PackageId>
         <Title>fennecs - tiny ECS</Title>
@@ -9,6 +9,14 @@
     <!-- Version is derived from git tags (v-prefixed, e.g. v0.7.1-pre) via MinVer at build time. -->
     <PropertyGroup>
         <MinVerTagPrefix>v</MinVerTagPrefix>
+
+        <!--
+            MinVer's target is skipped in a design time build, which is the path Hot Reload compiles
+            through. A normal Debug build stamped AssemblyVersion from the git tags while that path
+            fell back to the SDK default, and Edit and Continue refuses a reference whose version
+            moved (CS7038). Debug is not what gets packaged, so it simply keeps the default.
+        -->
+        <MinVerSkip Condition="'$(Configuration)' == 'Debug'">true</MinVerSkip>
     </PropertyGroup>
 
     <ItemGroup>
