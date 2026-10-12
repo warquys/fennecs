@@ -23,6 +23,26 @@ public static class ReflectionExtensions
         return entity;
     }
 
+    /// <summary>
+    /// Experimental method to remove a specific Component identified via RTTI (dynamically retrieved at runtime).
+    /// This helps with contravariant and covariant Component types, such as Lists.
+    /// Only this call uses the dynamic logic, the Component itself is as any normal Component type.
+    /// </summary>
+    public static Entity RemoveVirtual(this Entity entity, Type type, Match match = default)
+    {
+        entity.World.RemoveComponent(entity, TypeExpression.Of(type, match));
+        return entity;
+    }
+
+    /// <summary>
+    /// Experimental method to check if entity has a specific Component identified via RTTI (dynamically retrieved at runtime).
+    /// This helps with contravariant and covariant Component types, such as Lists.
+    /// Only this call uses the dynamic logic, the Component itself is as any normal Component type.
+    /// </summary>
+    public static bool HasVirtual(this Entity entity, Type type, Match match = default)
+    {
+        return entity.World.HasComponent(entity, TypeExpression.Of(type, match));
+    }
 
     /// <summary>
     /// Returns all Components on the entity that are <see cref="Type.IsAssignableTo"/> to the Type Parameter <c>T</c>.
