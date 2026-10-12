@@ -154,7 +154,7 @@ public sealed class Signal<T> : Signal where T : notnull
     /// The <see cref="RemoveCause"/> tells the three apart; in particular, whether the Entity
     /// survives the removal.
     /// </summary>
-    public event ComponentRemoved<T> BefforRemoved
+    public event ComponentRemoved<T> BeforRemoved
     {
         add
         {
