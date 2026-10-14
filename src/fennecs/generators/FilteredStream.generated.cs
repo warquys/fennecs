@@ -653,7 +653,13 @@ namespace fennecs
                 while (IncludedCount > 0)
                 {
                     using var worldLock = World.Lock();
-                    foreach (var table in Archetypes)
+
+                    // Snapshot: relation cleanup can migrate Entities into a brand new Archetype,
+                    // which the Query tracks at once — modifying this set mid-enumeration.
+                    using var tables = PooledList<Archetype>.Rent();
+                    tables.AddRange(Archetypes);
+
+                    foreach (var table in tables)
                     {
                         if (Includes(table)) table.Truncate(0);
                     }
@@ -1506,7 +1512,13 @@ namespace fennecs
                 while (IncludedCount > 0)
                 {
                     using var worldLock = World.Lock();
-                    foreach (var table in Archetypes)
+
+                    // Snapshot: relation cleanup can migrate Entities into a brand new Archetype,
+                    // which the Query tracks at once — modifying this set mid-enumeration.
+                    using var tables = PooledList<Archetype>.Rent();
+                    tables.AddRange(Archetypes);
+
+                    foreach (var table in tables)
                     {
                         if (Includes(table)) table.Truncate(0);
                     }
@@ -2382,7 +2394,13 @@ namespace fennecs
                 while (IncludedCount > 0)
                 {
                     using var worldLock = World.Lock();
-                    foreach (var table in Archetypes)
+
+                    // Snapshot: relation cleanup can migrate Entities into a brand new Archetype,
+                    // which the Query tracks at once — modifying this set mid-enumeration.
+                    using var tables = PooledList<Archetype>.Rent();
+                    tables.AddRange(Archetypes);
+
+                    foreach (var table in tables)
                     {
                         if (Includes(table)) table.Truncate(0);
                     }
@@ -3281,7 +3299,13 @@ namespace fennecs
                 while (IncludedCount > 0)
                 {
                     using var worldLock = World.Lock();
-                    foreach (var table in Archetypes)
+
+                    // Snapshot: relation cleanup can migrate Entities into a brand new Archetype,
+                    // which the Query tracks at once — modifying this set mid-enumeration.
+                    using var tables = PooledList<Archetype>.Rent();
+                    tables.AddRange(Archetypes);
+
+                    foreach (var table in tables)
                     {
                         if (Includes(table)) table.Truncate(0);
                     }
@@ -4203,7 +4227,13 @@ namespace fennecs
                 while (IncludedCount > 0)
                 {
                     using var worldLock = World.Lock();
-                    foreach (var table in Archetypes)
+
+                    // Snapshot: relation cleanup can migrate Entities into a brand new Archetype,
+                    // which the Query tracks at once — modifying this set mid-enumeration.
+                    using var tables = PooledList<Archetype>.Rent();
+                    tables.AddRange(Archetypes);
+
+                    foreach (var table in tables)
                     {
                         if (Includes(table)) table.Truncate(0);
                     }

@@ -2,6 +2,7 @@
 
 using System.Collections;
 using fennecs.CRUD;
+using fennecs.pools;
 
 namespace fennecs;
 
@@ -412,7 +413,13 @@ public sealed partial class Query : IReadOnlySet<Entity>, IDisposable, IBatchBeg
         var count = Count;
         if (count <= maxEntityCount) return;
 
-        foreach (var archetype in Archetypes)
+        // Truncating despawns Entities, and despawning a relation *target* migrates the Entities
+        // that related to it into a Signature they have never had before. That creates an Archetype,
+        // which this Query immediately tracks — mutating the very set being enumerated. Snapshot it.
+        using var archetypes = PooledList<Archetype>.Rent();
+        archetypes.AddRange(Archetypes);
+
+        foreach (var archetype in archetypes)
         {
             switch (mode)
             {
