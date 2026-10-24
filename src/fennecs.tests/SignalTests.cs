@@ -270,6 +270,58 @@ public class SignalTests
 
 
     [Fact]
+    public void A_Template_Spawn_In_A_Handler_Does_Not_Move_The_Span_Under_It()
+    {
+        using var world = new World();
+
+        var target = world.Spawn();
+        var spawned = new List<Entity>();
+
+        world.On<Position>().AfterAdded += (entities, positions) =>
+        {
+            if (entities[0] != target) return;
+
+            // Enough to grow the Archetype's Storages many times over, were it immediate.
+            using var template = world.Template().Add(new Position(7, 7));
+            for (var i = 0; i < 1000; i++) spawned.Add(template.Spawn());
+
+            // Written after the spawn: must land in the World, not in a discarded array.
+            positions[0] = new(42, 42);
+        };
+
+        target.Add(new Position(1, 1));
+
+        Assert.Equal(new(42, 42), target.Ref<Position>());
+        Assert.Equal(1000, spawned.Count);
+        Assert.All(spawned, e => Assert.Equal(new(7, 7), e.Ref<Position>()));
+    }
+
+
+    [Fact]
+    public void A_Template_Spawn_In_A_Runner_Is_Deferred()
+    {
+        using var world = new World();
+        world.Spawn().Add(new Health(1));
+
+        using var template = world.Template().Add(new Health(2));
+        var spawned = default(Entity);
+
+        world.Query<Health>().Stream().For((ref Health health) =>
+        {
+            spawned = template.Spawn();
+
+            // The handle is usable straight away; its Components arrive when the runner is done.
+            Assert.True(spawned.Alive);
+            Assert.False(spawned.Has<Health>());
+            health = new(10);
+        });
+
+        Assert.Equal(new(2), spawned.Ref<Health>());
+        Assert.Equal(2, world.Query<Health>().Compile().Count);
+    }
+
+
+    [Fact]
     public void Template_Spawn_Raises_Added()
     {
         using var world = new World();

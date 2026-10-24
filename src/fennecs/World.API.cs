@@ -154,6 +154,12 @@ public partial class World : IDisposable, IEnumerable<Entity>, IAspect
 
         if (destination.IsEmpty) return;
 
+        if (Mode == WorldMode.Deferred)
+        {
+            SpawnDeferred(destination, components, values);
+            return;
+        }
+
         if (_aspects.Count == 1)
         {
             var signature = new Signature(components.ToImmutableSortedSet()).Add(Comp<EntityIndex>.Plain.Expression);
@@ -200,6 +206,27 @@ public partial class World : IDisposable, IEnumerable<Entity>, IAspect
         // (the enclosing worldLock defers whatever the handlers do until the wave is complete)
         if (WatchesAny(components, added: true))
             SignalAdded(null, destination, components);
+    }
+
+
+    /// <summary>
+    /// Template spawn while the World is locked. Appending to an Archetype can grow its Storages,
+    /// which would pull them out from under live references (a runner's refs, a Signal's span).
+    /// The Entities are minted now, because the caller needs their handles, and join only the
+    /// Root; their Components follow as deferred Adds once the World catches up.
+    /// </summary>
+    private void SpawnDeferred(Span<Entity> destination, IReadOnlyList<TypeExpression> components, IReadOnlyList<object> values)
+    {
+        for (var i = 0; i < destination.Length; i++)
+        {
+            var entity = NewEntity();
+            destination[i] = entity;
+
+            for (var c = 0; c < components.Count; c++)
+            {
+                _deferredOperations.Enqueue(new DeferredOperation { Opcode = Opcode.Add, Entity = entity, TypeExpression = components[c], Data = values[c], FromSignal = InSignalDispatch });
+            }
+        }
     }
 
     /// <summary>
