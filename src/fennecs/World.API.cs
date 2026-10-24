@@ -166,11 +166,7 @@ public partial class World : IDisposable, IEnumerable<Entity>, IAspect
             var archetype = Main.GetArchetype(signature);
             archetype.Spawn(destination, components, values);
 
-            if (WatchesAny(components, added: true))
-            {
-                using var spawnLock = Lock();
-                SignalAdded(null, destination, components);
-            }
+            if (Signalling) SignalSpawned(destination, components);
             return;
         }
 
@@ -206,6 +202,18 @@ public partial class World : IDisposable, IEnumerable<Entity>, IAspect
         // (the enclosing worldLock defers whatever the handlers do until the wave is complete)
         if (WatchesAny(components, added: true))
             SignalAdded(null, destination, components);
+    }
+
+
+    // Kept out of Spawn on purpose: the lock's try/finally, inlined there, made every Template spawn
+    // ~30 % slower even with nobody subscribed.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void SignalSpawned(ReadOnlySpan<Entity> destination, IReadOnlyList<TypeExpression> components)
+    {
+        if (!WatchesAny(components, added: true)) return;
+
+        using var spawnLock = Lock();
+        SignalAdded(null, destination, components);
     }
 
 
