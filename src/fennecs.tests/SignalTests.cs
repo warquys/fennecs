@@ -868,7 +868,7 @@ public class SignalTests
 
         var calls = 0;
         var total = 0;
-        world.On<Health>().BeforRemoved += (es, hs, _) =>
+        world.On<Health>().BeforeRemoved += (es, hs, _) =>
         {
             calls++;
             Assert.Equal(es.Length, hs.Length);

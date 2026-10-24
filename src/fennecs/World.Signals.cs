@@ -172,7 +172,7 @@ public partial class World
     /// <example>
     /// <code>
     /// world.On&lt;Position&gt;().AfterAdded += (entities, positions) => index.Insert(entities, positions);
-    /// world.On&lt;Position&gt;().BeforRemoved += (entities, positions, cause) => index.Remove(entities);
+    /// world.On&lt;Position&gt;().BeforeRemoved += (entities, positions, cause) => index.Remove(entities);
     /// </code>
     /// </example>
     /// </summary>

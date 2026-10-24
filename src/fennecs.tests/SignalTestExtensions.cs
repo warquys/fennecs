@@ -12,7 +12,7 @@ internal static class SignalTestExtensions
 
     internal static void RemovedEach<T>(this Signal<T> signal, Action<Entity, T, RemoveCause> each) where T : notnull
     {
-        signal.BeforRemoved += (entities, values, cause) =>
+        signal.BeforeRemoved += (entities, values, cause) =>
         {
             for (var i = 0; i < entities.Length; i++) each(entities[i], values[i], cause);
         };
