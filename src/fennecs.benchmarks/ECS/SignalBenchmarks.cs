@@ -80,28 +80,28 @@ public class SignalBenchmarks
                 break;
 
             case Watchers.OtherType:
-                _world.On<Unwatched>().Added += Bump;
-                _world.On<Unwatched>().Removed += Drop;
+                _world.On<Unwatched>().AfterAdded += Bump;
+                _world.On<Unwatched>().BeforeRemoved += Drop;
                 break;
 
             case Watchers.Idle:
                 _world.On<Position>();  // materializes the Signal without subscribing
                 // Without a subscriber somewhere, the World would not be Signalling at all and this
                 // case would silently measure the very same path as None.
-                _world.On<Unwatched>().Added += Bump;
-                _world.On<Unwatched>().Removed += Drop;
+                _world.On<Unwatched>().AfterAdded += Bump;
+                _world.On<Unwatched>().BeforeRemoved += Drop;
                 break;
 
             case Watchers.One:
-                _world.On<Position>().Added += Bump;
-                _world.On<Position>().Removed += Drop;
+                _world.On<Position>().AfterAdded += Bump;
+                _world.On<Position>().BeforeRemoved += Drop;
                 break;
 
             case Watchers.Four:
                 for (var i = 0; i < 4; i++)
                 {
-                    _world.On<Position>().Added += Bump;
-                    _world.On<Position>().Removed += Drop;
+                    _world.On<Position>().AfterAdded += Bump;
+                    _world.On<Position>().BeforeRemoved += Drop;
                 }
                 break;
         }
@@ -113,9 +113,9 @@ public class SignalBenchmarks
 
 
     // Deliberately trivial: we are measuring fennecs dispatch, not the handler' own work.
-    private void Bump<T>(EntityRef entity, ref T value) => _counter++;
+    private void Bump<T>(ReadOnlySpan<Entity> entities, Span<T> values) => _counter += entities.Length;
 
-    private void Drop<T>(EntityRef entity, in T value, RemoveCause cause) => _counter++;
+    private void Drop<T>(ReadOnlySpan<Entity> entities, ReadOnlySpan<T> values, RemoveCause cause) => _counter += entities.Length;
 
 
     /// <summary>Per-Entity CRUD: one Archetype move per Entity, per direction.</summary>

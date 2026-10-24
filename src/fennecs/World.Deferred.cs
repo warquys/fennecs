@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 
 namespace fennecs;
 
@@ -49,27 +50,31 @@ public partial class World
     {
         while (operations.TryDequeue(out var op))
         {
-            if (!op.FromSignal)
-            {
-                Apply(op);
-                continue;
-            }
-
-            // Queued by a Signal handler: a failure here belongs to that handler, not to whoever
-            // took out the Lock (they are usually several stack frames apart by now).
-            try
-            {
-                Apply(op);
-            }
-            catch (Exception exception) when (exception is not SignalException)
-            {
-                throw new SignalException(op.Describe(), op.Entity, exception);
-            }
+            // The try/catch lives in its own method: inside this loop, it would cost every
+            // operation, Signal or not, the JIT optimizations an exception region forbids.
+            if (op.FromSignal) ApplyFromSignal(op);
+            else Apply(op);
         }
     }
 
 
-    private void Apply(DeferredOperation op)
+    // Queued by a Signal handler: a failure here belongs to that handler, not to whoever
+    // took out the Lock (they are usually several stack frames apart by now).
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void ApplyFromSignal(in DeferredOperation op)
+    {
+        try
+        {
+            Apply(op);
+        }
+        catch (Exception exception) when (exception is not SignalException)
+        {
+            throw new SignalException(op.Describe(), op.Opcode == Opcode.Batch ? [] : [op.Entity], exception);
+        }
+    }
+
+
+    private void Apply(in DeferredOperation op)
     {
         switch (op.Opcode)
         {
@@ -130,7 +135,9 @@ public partial class World
     }
 
 
-    internal enum Opcode
+    // A byte, so Opcode and FromSignal share the padding RemoveMode leaves: DeferredOperation stays
+    // the size it had before FromSignal existed, and a bulk deferred Despawn copies no more than it did.
+    internal enum Opcode : byte
     {
         // Entity operations
         Add,

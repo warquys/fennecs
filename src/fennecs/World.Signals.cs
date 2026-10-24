@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 
+using System.Collections;
+
 namespace fennecs;
 
 public partial class World
@@ -9,6 +11,15 @@ public partial class World
     // TypeID -> Signals watching that Component type. Usually zero or one entry per type;
     // several only when both plain and Wildcard expressions of the same type are watched.
     private readonly Dictionary<TypeID, List<Signal>> _signals = new();
+
+    // Signals the GC dropped from the registry for lack of subscribers. Weak, so they cost
+    // nothing to keep and the runtime collects them once nobody holds them any more.
+    private readonly Dictionary<TypeExpression, WeakReference<Signal>> _idle = new();
+
+    /// <summary>
+    /// tuple of bit with for index the type id. First bit is true if watching added, second for remove.
+    /// </summary>
+    private readonly BitArray _watch = new (LanguageType.MaxTypeId * 2);
 
     // Number of subscribed directions (a Signal's Added and Removed count separately).
     // Maintained by Signal<T>'s event accessors; a registered Signal nobody subscribed to is worth nothing.
@@ -26,42 +37,127 @@ public partial class World
     /// </summary>
     internal int SignalVersion { get; private set; }
 
-    internal void SignalSubscribed()
+    internal void SignalSubscribed(Signal signal)
     {
         _subscribers++;
         SignalVersion++;
+
+        // A Signal kept past a GC is no longer in the registry: subscribing is what brings it back.
+        if (!signal.Registered) Register(signal);
+        Refresh(signal.Expression.TypeId);
     }
 
-    internal void SignalUnsubscribed()
+    internal void SignalUnsubscribed(Signal signal)
     {
         _subscribers--;
         SignalVersion++;
+        Refresh(signal.Expression.TypeId);
     }
 
-    internal void ResetSubscribers()
+
+    // Subscriptions not yet disposed, so disposing the World can dispose them too.
+    private readonly HashSet<Subscription> _subscriptions = [];
+
+    internal void SubscriptionOpened(Subscription subscription) => _subscriptions.Add(subscription);
+
+    internal void SubscriptionClosed(Subscription subscription) => _subscriptions.Remove(subscription);
+
+
+    // Recomputes the watch bits of one Component type from the Signals that cover it.
+    private void Refresh(TypeID typeId)
     {
-        _subscribers = 0;
-        SignalVersion++;
+        // From scratch: the last unsubscribe must clear the bits, or the CRUD paths keep taking the Lock.
+        _watch[typeId * 2] = false;
+        _watch[typeId * 2 + 1] = false;
+
+        if (_signals.TryGetValue(typeId, out var signals))
+        {
+            foreach (var signal in signals)
+            {
+                if (signal.WantsAdded)
+                    _watch[typeId * 2] = true;
+                if (signal.WantsRemoved)
+                    _watch[typeId * 2 + 1] = true;
+            }
+        }
+    }
+
+    private void Register(Signal signal)
+    {
+        if (!_signals.TryGetValue(signal.Expression.TypeId, out var signals))
+        {
+            signals = [];
+            _signals[signal.Expression.TypeId] = signals;
+        }
+
+        signals.Add(signal);
+        signal.Registered = true;
+        _idle.Remove(signal.Expression);
     }
 
 
     /// <summary>
-    /// Could a Component of this type fire anything in this direction? An over-approximation by
-    /// design: it ignores relation targets, so it stays a probe and a short scan — cheaper than
-    /// the World Lock it saves the caller from taking.
+    /// Drops every Signal nobody subscribes to from the registry. They are not forgotten outright:
+    /// the World keeps a weak reference, so <see cref="On{T}(Match)"/> hands the very same instance
+    /// to whoever still holds it, and subscribing to it re-registers it. Whatever nobody holds
+    /// is collected by the runtime.
     /// </summary>
-    internal bool Watching(TypeID typeId, bool added)
+    internal void CollectIdleSignals()
     {
-        if (_subscribers == 0) return false;
-        if (!_signals.TryGetValue(typeId, out var signals)) return false;
-
-        foreach (var signal in signals)
+        foreach (var (expression, reference) in _idle)
         {
-            if (added ? signal.WantsAdded : signal.WantsRemoved) return true;
+            if (!reference.TryGetTarget(out _)) _idle.Remove(expression);
         }
-        return false;
+
+        if (_signals.Count == 0) return;
+
+        var toClear = new List<TypeID>();
+
+        foreach (var (type, signals) in _signals)
+        {
+            foreach (var signal in signals)
+            {
+                if (signal.WantsAdded || signal.WantsRemoved) continue;
+
+                signal.Registered = false;
+                _idle[signal.Expression] = new(signal);
+            }
+
+            signals.RemoveAll(static signal => !signal.Registered);
+            if (signals.Count == 0) toClear.Add(type);
+        }
+
+        foreach (var key in toClear) _signals.Remove(key);
+        _signals.TrimExcess();
     }
 
+
+    internal void ResetSubscribers()
+    {
+        // The World disposes what it handed out: those Subscriptions report inactive from now on.
+        foreach (var subscription in _subscriptions) subscription.Release();
+        _subscriptions.Clear();
+
+        // Subscriptions outliving the World must not count down a World that is gone.
+        foreach (var signals in _signals.Values)
+        {
+            foreach (var signal in signals) signal.Clear();
+        }
+        foreach (var reference in _idle.Values)
+        {
+            if (reference.TryGetTarget(out var signal)) signal.Clear();
+        }
+
+        _subscribers = 0;
+        SignalVersion++;
+        _watch.SetAll(false);
+    }
+
+
+    /// <summary>
+    /// Fast lookup (using an array) to check if there is any event watching the <paramref name="typeId"/>.
+    /// </summary>
+    internal bool Watching(TypeID typeId, bool added) => added ? _watch[typeId * 2] : _watch[typeId * 2 + 1];
 
     /// <summary>
     /// Would despawning this Entity fire anything? Scans what each Aspect stores for it,
@@ -101,21 +197,22 @@ public partial class World
     /// subscribe to their addition and removal.
     /// <example>
     /// <code>
-    /// world.On&lt;Position&gt;().Added += (EntityRef e, ref Position p) => index.Insert(e, p);
-    /// world.On&lt;Position&gt;().Removed += (EntityRef e, in Position p, RemoveCause cause) => index.Remove(e);
+    /// world.On&lt;Position&gt;().AfterAdded += (entities, positions) => index.Insert(entities, positions);
+    /// world.On&lt;Position&gt;().BeforeRemoved += (entities, positions, cause) => index.Remove(entities);
     /// </code>
     /// </example>
     /// </summary>
     /// <remarks>
     /// <para>
     /// Signals are memoized per expression: calling this repeatedly returns the same instance.
-    /// Subscribe through this method every time — <b>do not store the returned
-    /// <see cref="Signal{T}"/></b>.
+    /// To subscribe a lambda, prefer <see cref="SubscribeAdded{T}(ComponentAdded{T})"/> /
+    /// <see cref="SubscribeRemoved{T}(ComponentRemoved{T})"/>: disposing the returned
+    /// <see cref="Subscription"/> unsubscribes it, where <c>-=</c> would need the very same delegate.
     /// </para>
     /// <para>
-    /// The memoization holds only between garbage collections: <see cref="GC"/> drops every Signal
-    /// left without subscribers, and a stored one survives that drop as an orphan the World no
-    /// longer knows about. Subscribing to it still succeeds — and never fires again.
+    /// <see cref="GC"/> drops every Signal left without subscribers from the World's registry, but
+    /// only weakly: a <see cref="Signal{T}"/> you kept is handed out again by this method, and
+    /// subscribing to it re-registers it. Storing one is therefore safe; it is merely unnecessary.
     /// </para>
     /// </remarks>
     public Signal<T> On<T>() where T : notnull => On<T>(default);
@@ -141,10 +238,51 @@ public partial class World
             if (existing.Expression == expression) return (Signal<T>)existing;
         }
 
+        // Still held by someone since the last GC: the same instance goes back into service.
+        if (_idle.TryGetValue(expression, out var weak) && weak.TryGetTarget(out var revived))
+        {
+            Register(revived);
+            return (Signal<T>)revived;
+        }
+
         var signal = new Signal<T>(this, expression);
+        signal.Registered = true;
         signals.Add(signal);
         return signal;
     }
+
+
+    /// <summary>
+    /// Subscribes <paramref name="handler"/> to the <see cref="Signal{T}.AfterAdded"/> of plain Components
+    /// of type <typeparamref name="T"/>, until the returned <see cref="Subscription"/> is disposed.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// using var subscription = world.SubscribeAdded&lt;Position&gt;((entities, positions) => index.Insert(entities, positions));
+    /// </code>
+    /// </example>
+    public Subscription SubscribeAdded<T>(ComponentAdded<T> handler) where T : notnull => On<T>().SubscribeAdded(handler);
+
+    /// <inheritdoc cref="SubscribeAdded{T}(ComponentAdded{T})"/>
+    /// <param name="match"><inheritdoc cref="On{T}(Match)" path="/param[@name='match']"/></param>
+    /// <param name="handler">the handler to subscribe</param>
+    public Subscription SubscribeAdded<T>(Match match, ComponentAdded<T> handler) where T : notnull => On<T>(match).SubscribeAdded(handler);
+
+    /// <summary>
+    /// Subscribes <paramref name="handler"/> to the <see cref="Signal{T}.BeforeRemoved"/> of plain Components
+    /// of type <typeparamref name="T"/>, until the returned <see cref="Subscription"/> is disposed.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// using var subscription = world.SubscribeRemoved&lt;Position&gt;((entities, positions, cause) => index.Remove(entities));
+    /// </code>
+    /// </example>
+    public Subscription SubscribeRemoved<T>(ComponentRemoved<T> handler) where T : notnull => On<T>().SubscribeRemoved(handler);
+
+    /// <inheritdoc cref="SubscribeRemoved{T}(ComponentRemoved{T})"/>
+    /// <param name="match"><inheritdoc cref="On{T}(Match)" path="/param[@name='match']"/></param>
+    /// <param name="handler">the handler to subscribe</param>
+    public Subscription SubscribeRemoved<T>(Match match, ComponentRemoved<T> handler) where T : notnull => On<T>(match).SubscribeRemoved(handler);
 
     #endregion
 
@@ -155,129 +293,109 @@ public partial class World
     // and thus unaffected by the lock). Handlers therefore see a consistent World, and any structural
     // change they make is deferred until the whole operation has completed.
 
-    /// <summary>Emits Added for one Component that was just stored.</summary>
-    internal void SignalAdded(Aspect aspect, Entity entity, TypeExpression expression)
+    /// <summary>
+    /// Emits Added for a specific expression.
+    /// Must be called <i>after</i> the structural change, with the Entities in their new home.
+    /// </summary>
+    /// <param name="aspect">the Aspect storing the Components; <see langword="null"/> routes each Component to its owning Aspect (freshly spawned Entities)</param>
+    /// <param name="entities">the Entities that received the Components</param>
+    /// <param name="expression"></param>
+    internal void SignalAdded(Aspect? aspect, ReadOnlySpan<Entity> entities, TypeExpression expression)
     {
-        if (!_signals.TryGetValue(expression.TypeId, out var signals)) return;
+        if (!Watching(expression.TypeId, added: true)) return;
 
-        EmitAdded(signals, aspect, entity, expression);
+        EmitAdded(_signals[expression.TypeId], aspect ?? AspectOf(expression), entities, expression);
+    }
+
+    /// <summary>
+    /// Emits Added for a set of Components across a run of Entities that were just given them.
+    /// Must be called <i>after</i> the structural change, with the Entities in their new home.
+    /// </summary>
+    /// <param name="aspect"><inheritdoc cref="SignalAdded(Aspect?, ReadOnlySpan{Entity}, TypeExpression)"/></param>
+    /// <param name="entities"><inheritdoc cref="SignalAdded(Aspect?, ReadOnlySpan{Entity}, TypeExpression)"/></param>
+    /// <param name="types">the Components that were added to every one of them</param>
+    internal void SignalAdded(Aspect? aspect, ReadOnlySpan<Entity> entities, IEnumerable<TypeExpression> types)
+    {
+        foreach (var expression in types)
+        {
+            SignalAdded(aspect, entities, expression);
+        }
     }
 
 
     /// <summary>
-    /// Emits Removed for one Component that is about to be discarded, or — for a Wildcard
-    /// <paramref name="pattern"/> — for every stored expression it covers.
+    /// Emits Removed for a specific expression across a run of Entities that are about to lose it,
+    /// or — for a Wildcard <paramref name="expression"/> — once for every stored expression it covers.
     /// Must be called <i>before</i> the structural change, while the values are still readable.
     /// </summary>
-    internal void SignalRemoving(Aspect aspect, Entity entity, TypeExpression pattern, RemoveCause cause = RemoveCause.Removed)
+    /// <remarks>
+    /// <para>
+    /// Nothing is emitted if no Signal watches the type of <paramref name="expression"/>, or if the
+    /// Entities do not store it. (a plain expression is checked against the first Entity only)
+    /// </para>
+    /// <para>
+    /// Every Entity must live in the same Archetype of <paramref name="aspect"/>, so that what one of
+    /// them stores is what all of them store. <paramref name="entities"/> must not be empty and must be
+    /// members of <paramref name="aspect"/>: this overload trusts its caller, the one for a collection
+    /// of expressions checks it for all of them at once.
+    /// </para>
+    /// </remarks>
+    /// <param name="aspect">the Aspect storing the Components</param>
+    /// <param name="entities">the Entities that are about to lose the Component</param>
+    /// <param name="expression">the Component to signal; a Wildcard expands to the stored expressions it matches</param>
+    /// <param name="cause">why the Component is going away</param>
+    internal void SignalRemoving(Aspect aspect, ReadOnlySpan<Entity> entities, TypeExpression expression, RemoveCause cause)
     {
-        if (!_signals.TryGetValue(pattern.TypeId, out var signals)) return;
-        if (!aspect.Contains(entity)) return;
+        if (!Watching(expression.TypeId, added: false)) return;
 
-        if (!pattern.isWildcard)
+        var signals = _signals[expression.TypeId];
+
+        if (!expression.isWildcard)
         {
-            if (aspect.HasComponent(entity, pattern))
-                EmitRemoved(signals, aspect, entity, pattern, cause);
+            if (aspect.HasComponent(entities[0], expression))
+                EmitRemoved(signals, aspect, entities, expression, cause);
             return;
         }
 
-        foreach (var stored in aspect.GetSignature(entity))
+        foreach (var stored in aspect.GetSignature(entities[0]))
         {
-            if (pattern.Matches(stored))
-                EmitRemoved(signals, aspect, entity, stored, cause);
+            if (expression.Matches(stored))
+                EmitRemoved(signals, aspect, entities, stored, cause);
         }
     }
 
+    /// <summary>
+    /// Emits Removed for a set of Components across a run of Entities that are about to lose them,
+    /// or — for a Wildcard pattern — for every stored expression it covers.
+    /// Must be called <i>before</i> the structural change, while the values are still readable.
+    /// </summary>
+    /// <remarks>
+    /// Every Entity must live in the same Archetype of <paramref name="aspect"/>, so that what one of
+    /// them stores is what all of them store.
+    /// </remarks>
+    internal void SignalRemoving(Aspect aspect, ReadOnlySpan<Entity> entities, IEnumerable<TypeExpression> types, RemoveCause cause)
+    {
+        if (entities.IsEmpty || !aspect.Contains(entities[0])) return;
+
+        foreach (var expression in types)
+        {
+            SignalRemoving(aspect, entities, expression, cause);
+        }
+    }
 
     /// <summary>
     /// Emits Removed for every Component this Aspect stores for the Entity — the Despawn case.
     /// Must be called <i>before</i> the Entity's rows are deleted.
     /// </summary>
+    /// <remarks>The Entity must be a member of <paramref name="aspect"/>.</remarks>
     internal void SignalRemovingAll(Aspect aspect, Entity entity, RemoveCause cause = RemoveCause.Despawned)
     {
-        if (!aspect.Contains(entity)) return;
-
-
         foreach (var stored in aspect.GetSignature(entity))
         {
             if (!Watching(stored.TypeId, added: false)) continue;
 
-            EmitRemoved(_signals[stored.TypeId], aspect, entity, stored, cause);
+            EmitRemoved(_signals[stored.TypeId], aspect, new ReadOnlySpan<Entity>(in entity), stored, cause);
         }
-    }
-
-
-    /// <summary>
-    /// Emits Removed for a set of Components across a contiguous run of Archetype rows.
-    /// Must be called <i>before</i> the structural change.
-    /// </summary>
-    internal void SignalRemovingRows(Aspect aspect, ReadOnlySpan<EntityIndex> indices, IEnumerable<TypeExpression> types, RemoveCause cause)
-    {
-        var watched = Watched(types, added: false);
-        if (watched.Count == 0) return;
-
-        foreach (var index in indices)
-        {
-            var entity = EntityFor(index);
-            foreach (var (expression, signals) in watched)
-                EmitRemoved(signals, aspect, entity, expression, cause);
-        }
-    }
-
-
-    /// <summary>
-    /// Emits Added for a set of Components across a batch of Entities.
-    /// Must be called <i>after</i> the structural change, with the Entities in their new home.
-    /// </summary>
-    internal void SignalAddedRows(Aspect aspect, ReadOnlySpan<Entity> entities, IEnumerable<TypeExpression> types)
-    {
-        var watched = Watched(types, added: true);
-        if (watched.Count == 0) return;
-
-        foreach (var entity in entities)
-        {
-            foreach (var (expression, signals) in watched)
-                EmitAdded(signals, aspect, entity, expression);
-        }
-    }
-
-
-    /// <summary>
-    /// Emits Added for freshly spawned Entities, routing each Component to its owning Aspect.
-    /// (the <see cref="EntityTemplate"/> path writes straight into the final Archetypes)
-    /// </summary>
-    internal void SignalSpawned(ReadOnlySpan<Entity> entities, IReadOnlyList<TypeExpression> types)
-    {
-        var watched = Watched(types, added: true);
-        if (watched.Count == 0) return;
-
-        foreach (var entity in entities)
-        {
-            foreach (var (expression, signals) in watched)
-                EmitAdded(signals, AspectOf(expression), entity, expression);
-        }
-    }
-
-
-    /// <summary>
-    /// Pre-filters a set of expressions down to those actually watched, so the per-Entity
-    /// loops of the bulk paths do not re-probe the registry.
-    /// </summary>
-    private List<(TypeExpression expression, List<Signal> signals)> Watched(IEnumerable<TypeExpression> types, bool added)
-    {
-        List<(TypeExpression, List<Signal>)> watched = [];
-        foreach (var type in types)
-        {
-            if (!_signals.TryGetValue(type.TypeId, out var signals)) continue;
-
-            // A registered Signal nobody subscribed to must not cost the per-Entity loop anything.
-            // Type-level only: matching keys here would skip narrower Signals when `type` is a
-            // Wildcard, and the per-Entity Emit re-checks the concrete expression anyway.
-            if (!Watching(type.TypeId, added)) continue;
-
-            watched.Add((type, signals));
-        }
-        return watched;
     }
 
 
@@ -296,11 +414,8 @@ public partial class World
     }
 
 
-
-    private void EmitAdded(List<Signal> signals, Aspect aspect, Entity entity, TypeExpression expression)
+    private void EmitAdded(List<Signal> signals, Aspect aspect, ReadOnlySpan<Entity> entities, TypeExpression expression)
     {
-        var entityRef = Live(aspect, entity);
-
         _dispatching++;
         try
         {
@@ -319,11 +434,11 @@ public partial class World
                 // A handler's fault is never the caller's fault: wrap it so the two can be told apart.
                 try
                 {
-                    signal.InvokeAdded(entityRef, expression);
+                    signal.InvokeAdded(aspect, entities, expression);
                 }
                 catch (Exception exception) when (exception is not SignalException)
                 {
-                    throw new SignalException(signal, entity, "Added", exception);
+                    throw new SignalException(signal, entities.ToArray(), "Added", exception);
                 }
             }
         }
@@ -334,10 +449,8 @@ public partial class World
     }
 
 
-    private void EmitRemoved(List<Signal> signals, Aspect aspect, Entity entity, TypeExpression expression, RemoveCause cause)
+    private void EmitRemoved(List<Signal> signals, Aspect aspect, ReadOnlySpan<Entity> entities, TypeExpression expression, RemoveCause cause)
     {
-        var entityRef = Live(aspect, entity);
-
         _dispatching++;
         try
         {
@@ -351,11 +464,11 @@ public partial class World
 
                 try
                 {
-                    signal.InvokeRemoved(entityRef, expression, cause);
+                    signal.InvokeRemoved(aspect, entities, expression, cause);
                 }
                 catch (Exception exception) when (exception is not SignalException)
                 {
-                    throw new SignalException(signal, entity, "Removed", exception);
+                    throw new SignalException(signal, entities.ToArray(), "Removed", exception);
                 }
             }
         }
@@ -363,17 +476,6 @@ public partial class World
         {
             _dispatching--;
         }
-    }
-
-
-    /// <summary>
-    /// The Entity as handed to the handlers: a live EntityRef. The World is locked for the duration
-    /// of the dispatch, so the Entity cannot move rows while they hold it.
-    /// </summary>
-    private static EntityRef Live(Aspect aspect, Entity entity)
-    {
-        ref var meta = ref aspect.GetEntityMeta(entity);
-        return new(meta.Archetype, meta.Row);
     }
 
 
