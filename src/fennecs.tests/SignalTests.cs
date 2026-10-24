@@ -981,6 +981,26 @@ public class SignalTests
 
 
     [Fact]
+    public void The_Last_Unsubscribe_Stops_Watching_The_Type()
+    {
+        using var world = new World();
+        var typeId = TypeExpression.Of<Health>(default).TypeId;
+
+        var added = world.SubscribeAdded<Health>((_, _) => { });
+        var removed = world.SubscribeRemoved<Health>((_, _, _) => { });
+        Assert.True(world.Watching(typeId, added: true));
+        Assert.True(world.Watching(typeId, added: false));
+
+        added.Dispose();
+        Assert.False(world.Watching(typeId, added: true));
+        Assert.True(world.Watching(typeId, added: false));
+
+        removed.Dispose();
+        Assert.False(world.Watching(typeId, added: false));
+    }
+
+
+    [Fact]
     public void A_Subscription_Only_Removes_Its_Own_Handler()
     {
         using var world = new World();

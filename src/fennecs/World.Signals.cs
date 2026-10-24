@@ -66,6 +66,10 @@ public partial class World
     // Recomputes the watch bits of one Component type from the Signals that cover it.
     private void Refresh(TypeID typeId)
     {
+        // From scratch: the last unsubscribe must clear the bits, or the CRUD paths keep taking the Lock.
+        _watch[typeId * 2] = false;
+        _watch[typeId * 2 + 1] = false;
+
         if (_signals.TryGetValue(typeId, out var signals))
         {
             foreach (var signal in signals)
