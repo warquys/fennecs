@@ -192,17 +192,22 @@ public sealed class Archetype : IEnumerable<Entity>, IComparable<Archetype>
 
         var toDelete = ((ReadOnlySpan<EntityIndex>)EntityStorage.Span).Slice(Count - excess, excess);
 
-        if (WatchedForRemoval)
+        if (World.Signalling)
         {
-            // Truncation despawns these Entities: signal the Components stored here before the
-            // Storages are cleared (World.Recycle can no longer read them), then let the other
-            // Aspects signal their own as they evict the Entities. The lock spans all of it.
+            // Truncation despawns these Entities: signal everything they lose — here, in the other
+            // Aspects, and the Relations targeting them — before a single row is deleted, so a
+            // throwing handler leaves the World untouched. The lock spans all of it.
             using var worldLock = World.Lock();
-            // (the Entity column is in Types too; no Signal can watch it, so it is skipped by the type filter)
             var entities = World.RentArrayForEntities(toDelete);
             try
             {
-                World.SignalRemoving(Aspect, entities.AsSpan(0, toDelete.Length), Types, RemoveCause.Despawned);
+                var span = entities.AsSpan(0, toDelete.Length);
+
+                // This Archetype's rows in one go.
+                // (the Entity column is in Types too; no Signal can watch it, so it is skipped by the type filter)
+                if (WatchedForRemoval) World.SignalRemoving(Aspect, span, Types, RemoveCause.Despawned);
+
+                foreach (var entity in span) World.SignalDespawn(Aspect, entity);
             }
             finally
             {

@@ -141,10 +141,6 @@ public sealed partial class Aspect : IEnumerable<Entity>
             ref var meta = ref _meta[entity.Index];
 
             var table = meta.Archetype;
-
-            // Despawn discards every Component stored here: signal them while still readable.
-            // (the Archetype answers "is anyone watching?" from a memoized flag)
-            if (table.WatchedForRemoval) World.SignalRemovingAll(this, entity);
             table.Delete(meta.Row);
 
             DespawnDependencies(entity);
@@ -168,6 +164,53 @@ public sealed partial class Aspect : IEnumerable<Entity>
     {
         DespawnDependencies(entity);
         _meta[entity.Index] = default;
+    }
+
+
+    /// <summary>
+    /// Emits Removed for everything a Despawn of this Entity discards here: the Components this
+    /// Aspect stores for it, and the Relations other Entities hold to it.
+    /// </summary>
+    /// <remarks>
+    /// Signals only, no structural change: the World signals every Aspect first and deletes rows
+    /// after, so a throwing handler aborts the Despawn before anything was changed.
+    /// </remarks>
+    internal void SignalDespawn(Entity entity)
+    {
+        // (the Archetype answers "is anyone watching?" from a memoized flag)
+        if (Contains(entity) && _meta[entity.Index].Archetype.WatchedForRemoval) World.SignalRemovingAll(this, entity);
+
+        SignalDependencies(entity);
+    }
+
+
+    /// <summary>
+    /// Emits <see cref="RemoveCause.TargetDespawned"/> for the Relations that <see cref="DespawnDependencies"/>
+    /// will strip from other Entities. Must be called <i>before</i> the Despawn changes anything.
+    /// </summary>
+    internal void SignalDependencies(Entity entity)
+    {
+        if (!_typesByRelationTarget.TryGetValue(entity.Key, out var types)) return;
+
+        // Same Archetypes as DespawnDependencies, so exactly what it strips is what gets signalled.
+        var homeArchetype = entity.Index < (uint)_meta.Length ? _meta[entity.Index].Archetype : null;
+        var relating = _archetypes.Where(a => a.Signature.Matches(types)).ToList();
+
+        foreach (var archetype in relating)
+        {
+            if (archetype == homeArchetype) continue;
+            if (archetype.Count <= 0) continue;
+
+            var entities = World.RentArrayForEntities(archetype.EntityStorage.Span);
+            try
+            {
+                World.SignalRemoving(this, entities.AsSpan(0, archetype.Count), archetype.Signature.Intersect(types), RemoveCause.TargetDespawned);
+            }
+            finally
+            {
+                World.ReturnArrayEntities(entities);
+            }
+        }
     }
 
 
@@ -206,19 +249,7 @@ public sealed partial class Aspect : IEnumerable<Entity>
 
             var signatureWithoutTarget = archetype.Signature.Except(types);
 
-            // The Entities in this Archetype lose their Relations to the despawned target.
-            if (World.Signalling)
-            {
-                var entities = World.RentArrayForEntities(archetype.EntityStorage.Span);
-                try
-                {
-                    World.SignalRemoving(this, entities.AsSpan(0, archetype.Count), archetype.Signature.Intersect(types), RemoveCause.TargetDespawned);
-                }
-                finally
-                {
-                    World.ReturnArrayEntities(entities);
-                }
-            }
+            // (the TargetDespawned Signals for these Relations were raised by SignalDependencies)
 
             // Lazy membership: losing their last owned Components evicts the Entities from this Aspect.
             if (!IsMain && signatureWithoutTarget.Count == 1)

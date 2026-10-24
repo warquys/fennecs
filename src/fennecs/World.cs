@@ -146,14 +146,31 @@ public partial class World
         // Components nobody watches must stay as fast as it was before Signals existed.
         if (WatchingAnyOf(entity))
         {
-            // Aspect.Despawn emits Removed for everything it stores for the Entity; the lock keeps
-            // whatever the handlers do from interleaving with the despawn itself.
+            // The lock keeps whatever the handlers do from interleaving with the despawn itself.
             using var worldLock = Lock();
+            SignalDespawn(null, entity);
             DespawnRows(entity);
             return;
         }
 
         DespawnRows(entity);
+    }
+
+
+    /// <summary>
+    /// Emits Removed for everything a Despawn of this Entity discards, in every Aspect, before any
+    /// row is deleted: a throwing handler then aborts the Despawn with the World left untouched.
+    /// </summary>
+    /// <param name="signalled">an Aspect whose own rows for the Entity were already signalled
+    /// (Archetype.Truncate does this in bulk); only the Relations targeting the Entity are left there</param>
+    /// <param name="entity">the Entity about to be despawned</param>
+    internal void SignalDespawn(Aspect? signalled, Entity entity)
+    {
+        foreach (var aspect in _aspects)
+        {
+            if (aspect == signalled) aspect.SignalDependencies(entity);
+            else aspect.SignalDespawn(entity);
+        }
     }
 
 

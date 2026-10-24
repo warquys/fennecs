@@ -626,6 +626,25 @@ public class SignalTests
 
 
     [Fact]
+    public void A_Throwing_Truncate_Handler_In_A_Secondary_Aspect_Leaves_The_World_Consistent()
+    {
+        using var world = new World();
+        world.AddAspect("visuals").Owns<Position>();
+
+        for (var i = 0; i < 10; i++) world.Spawn().Add(new Health(i)).Add(new Position(i, i));
+        world.On<Position>().RemovedEach((_, _, _) => throw new InvalidOperationException("boom"));
+
+        var query = world.Query<Health>().Compile();
+        Assert.Throws<SignalException>(() => query.Truncate(4));
+
+        Assert.Equal(10, world.Count);
+        Assert.Equal(10, world.All.Count);
+        Assert.Equal(10, query.Count);
+        Assert.Equal(10, world.Query<Position>().Compile().Count);
+    }
+
+
+    [Fact]
     public void A_Throwing_Batch_Removed_Handler_Leaves_The_World_Consistent()
     {
         using var world = new World();
