@@ -565,6 +565,84 @@ public class SignalTests
 
 
     [Fact]
+    public void A_Throwing_Removed_Handler_Leaves_The_World_Consistent()
+    {
+        using var world = new World();
+
+        var entity = world.Spawn().Add(new Health(1));
+        world.On<Health>().RemovedEach((_, _, _) => throw new InvalidOperationException("boom"));
+
+        Assert.Throws<SignalException>(() => entity.Remove<Health>());
+
+        // The removal never happened: the handler runs before the structural change.
+        Assert.True(entity.Has<Health>());
+        Assert.Equal(1, world.Count);
+        Assert.Single(world.All);
+    }
+
+
+    [Fact]
+    public void A_Throwing_Despawn_Handler_In_A_Secondary_Aspect_Leaves_The_World_Consistent()
+    {
+        using var world = new World();
+        world.AddAspect("visuals").Owns<Position>();
+
+        var entity = world.Spawn().Add(new Health(1)).Add(new Position(1, 2));
+        world.On<Position>().RemovedEach((_, _, _) => throw new InvalidOperationException("boom"));
+
+        Assert.Throws<SignalException>(() => entity.Despawn());
+
+        // The Despawn fails as a whole: the Entity is still alive, in every Aspect, with everything it had.
+        Assert.True(entity.Alive);
+        Assert.Equal(1, world.Count);
+        Assert.Single(world.All);
+        Assert.True(entity.Has<Health>());
+        Assert.True(entity.Has<Position>());
+
+        // ... and the World is still usable afterwards.
+        world.Spawn().Add(new Health(2));
+        Assert.Equal(2, world.Count);
+        Assert.Equal(2, world.All.Count);
+    }
+
+
+    [Fact]
+    public void A_Throwing_Despawn_Handler_Of_The_Main_Aspect_Leaves_The_Secondary_Aspect_Intact()
+    {
+        using var world = new World();
+        world.AddAspect("visuals").Owns<Position>();
+
+        var entity = world.Spawn().Add(new Health(1)).Add(new Position(1, 2));
+        world.On<Health>().RemovedEach((_, _, _) => throw new InvalidOperationException("boom"));
+
+        Assert.Throws<SignalException>(() => entity.Despawn());
+
+        Assert.True(entity.Alive);
+        Assert.Equal(1, world.Count);
+        Assert.Single(world.All);
+        Assert.True(entity.Has<Health>());
+        Assert.True(entity.Has<Position>());
+    }
+
+
+    [Fact]
+    public void A_Throwing_Batch_Removed_Handler_Leaves_The_World_Consistent()
+    {
+        using var world = new World();
+
+        for (var i = 0; i < 10; i++) world.Spawn().Add(new Health(i));
+        world.On<Health>().RemovedEach((_, _, _) => throw new InvalidOperationException("boom"));
+
+        var query = world.Query<Health>().Compile();
+        Assert.Throws<SignalException>(() => query.Batch().Remove<Health>().Submit());
+
+        Assert.Equal(10, world.Count);
+        Assert.Equal(10, world.All.Count);
+        Assert.Equal(10, query.Count);
+    }
+
+
+    [Fact]
     public void A_Handlers_Failed_Deferred_Change_Is_Wrapped_As_Deferred()
     {
         using var world = new World();
