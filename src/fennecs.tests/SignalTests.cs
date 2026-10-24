@@ -594,8 +594,8 @@ public class SignalTests
 
         Assert.Same(boom, thrown.InnerException);
         Assert.Same(signal, thrown.Signal);
-        Assert.Single(thrown.Entity);
-        Assert.Equal(entity, thrown.Entity[0]);
+        Assert.Single(thrown.Entities);
+        Assert.Equal(entity, thrown.Entities[0]);
         Assert.False(thrown.Deferred);
     }
 
@@ -726,8 +726,8 @@ public class SignalTests
 
         Assert.True(thrown.Deferred);
         Assert.Null(thrown.Signal);
-        Assert.Single(thrown.Entity);
-        Assert.Equal(entity, thrown.Entity[0]);
+        Assert.Single(thrown.Entities);
+        Assert.Equal(entity, thrown.Entities[0]);
         Assert.IsType<InvalidOperationException>(thrown.InnerException);
     }
 

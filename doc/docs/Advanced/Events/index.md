@@ -178,7 +178,7 @@ try
 catch (SignalException e)
 {
     Console.WriteLine(e.Signal);    // Signal<Health>(Plain) - who misbehaved
-    Console.WriteLine(e.Entity[0]); // which Entities were being signalled
+    Console.WriteLine(e.Entities[0]); // which Entities were being signalled
     Console.WriteLine(e.Deferred);  // False - the handler threw while running
     throw e.InnerException!;        // ...boom
 }
