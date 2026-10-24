@@ -366,9 +366,10 @@ public partial class World : IDisposable, IEnumerable<Entity>, IAspect
     public void Dispose()
     {
         //TODO: Dispose all Object Links, Queries, etc.?
+        // (Signals first, while the registry still knows them all)
+        ResetSubscribers();
         _signals.Clear();
         _idle.Clear();
-        ResetSubscribers();
         ReleaseTag();
     }
 

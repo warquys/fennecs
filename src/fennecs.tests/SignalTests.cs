@@ -952,6 +952,118 @@ public class SignalTests
     }
 
     [Fact]
+    public void Disposing_A_Subscription_Unsubscribes_Its_Lambda()
+    {
+        using var world = new World();
+
+        var added = 0;
+        var removed = 0;
+        var onAdded = world.SubscribeAdded<Health>((entities, _) => added += entities.Length);
+        var onRemoved = world.SubscribeRemoved<Health>((entities, _, _) => removed += entities.Length);
+
+        Assert.True(onAdded.Active);
+        Assert.Same(world.On<Health>(), onAdded.Signal);
+
+        var entity = world.Spawn().Add(new Health(1));
+        entity.Remove<Health>();
+        Assert.Equal(1, added);
+        Assert.Equal(1, removed);
+
+        onAdded.Dispose();
+        onRemoved.Dispose();
+        Assert.False(onAdded.Active);
+
+        entity.Add(new Health(2));
+        entity.Remove<Health>();
+        Assert.Equal(1, added);
+        Assert.Equal(1, removed);
+    }
+
+
+    [Fact]
+    public void A_Subscription_Only_Removes_Its_Own_Handler()
+    {
+        using var world = new World();
+
+        var first = 0;
+        var second = 0;
+        using (world.SubscribeAdded<Health>((_, _) => first++))
+        {
+            using var _ = world.SubscribeAdded<Health>((_, _) => second++);
+            world.Spawn().Add(new Health(1));
+        }
+        world.SubscribeAdded<Health>((_, _) => second++);
+
+        world.Spawn().Add(new Health(2));
+
+        Assert.Equal(1, first);
+        Assert.Equal(2, second);
+    }
+
+
+    [Fact]
+    public void A_Disposed_Subscription_Leaves_An_Idle_Signal_For_The_GC()
+    {
+        using var world = new World();
+
+        static WeakReference SubscribeAndDispose(World world)
+        {
+            using var subscription = world.SubscribeAdded<Health>((_, _) => { });
+            return new WeakReference(subscription.Signal);
+        }
+
+        var weak = SubscribeAndDispose(world);
+
+        world.GC();
+        System.GC.Collect();
+        System.GC.WaitForPendingFinalizers();
+
+        Assert.False(weak.IsAlive);
+    }
+
+
+    [Fact]
+    public void A_Subscription_May_Outlive_Its_World()
+    {
+        var world = new World();
+        var subscription = world.SubscribeAdded<Health>(Match.Any, (_, _) => { });
+        var removal = world.SubscribeRemoved<Health>((_, _, _) => { });
+
+        // The World disposes what it handed out.
+        world.Dispose();
+        Assert.False(subscription.Active);
+        Assert.False(removal.Active);
+
+        subscription.Dispose();
+        subscription.Dispose();
+        removal.Dispose();
+
+        Assert.False(subscription.Active);
+    }
+
+
+    [Fact]
+    public void GC_Keeps_A_Subscribed_Signal_Even_Without_The_Component()
+    {
+        using var world = new World();
+
+        var seen = 0;
+        using var subscription = world.SubscribeAdded<Health>((entities, _) => seen += entities.Length);
+
+        // No Entity stores Health, nor ever did: the Subscription alone keeps the Signal in service.
+        world.GC();
+        System.GC.Collect();
+        System.GC.WaitForPendingFinalizers();
+
+        Assert.True(subscription.Active);
+        Assert.Same(subscription.Signal, world.On<Health>());
+
+        world.Spawn().Add(new Health(1));
+        Assert.Equal(1, seen);
+    }
+
+
+    [Fact]
     public void A_Single_Add_Is_A_Span_Of_One()
     {
         using var world = new World();

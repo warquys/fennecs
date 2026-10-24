@@ -94,6 +94,15 @@ public abstract class Signal
     internal abstract bool WantsAdded { get; }
     internal abstract bool WantsRemoved { get; }
 
+    /// <summary>Drops every handler, without telling the World. (only for <see cref="fennecs.World.Dispose"/>)</summary>
+    internal abstract void Clear();
+
+    /// <summary>Unsubscribes a handler a <see cref="Subscription"/> added to <see cref="Signal{T}.AfterAdded"/>.</summary>
+    internal abstract void RemoveAdded(Delegate handler);
+
+    /// <summary>Unsubscribes a handler a <see cref="Subscription"/> added to <see cref="Signal{T}.BeforeRemoved"/>.</summary>
+    internal abstract void RemoveRemoved(Delegate handler);
+
     // All Entities live in the same Archetype of `aspect`, in consecutive rows, in this order.
     internal abstract void InvokeAdded(Aspect aspect, ReadOnlySpan<Entity> entities, TypeExpression expression);
     internal abstract void InvokeRemoved(Aspect aspect, ReadOnlySpan<Entity> entities, TypeExpression expression, RemoveCause cause);
@@ -176,6 +185,38 @@ public sealed class Signal<T> : Signal where T : notnull
 
     internal override bool WantsAdded => _added is not null;
     internal override bool WantsRemoved => _removed is not null;
+
+    // The World is gone: drop the handlers without telling it, so a later -= (or a Subscription
+    // disposed after the World) finds nothing to unsubscribe and leaves the count alone.
+    internal override void Clear()
+    {
+        _added = null;
+        _removed = null;
+    }
+
+    /// <summary>
+    /// Subscribes <paramref name="handler"/> to <see cref="AfterAdded"/>, for as long as the returned
+    /// <see cref="fennecs.Subscription"/> is not disposed.
+    /// </summary>
+    public Subscription SubscribeAdded(ComponentAdded<T> handler)
+    {
+        AfterAdded += handler;
+        return new(World, this, handler, added: true);
+    }
+
+    /// <summary>
+    /// Subscribes <paramref name="handler"/> to <see cref="BeforeRemoved"/>, for as long as the returned
+    /// <see cref="fennecs.Subscription"/> is not disposed.
+    /// </summary>
+    public Subscription SubscribeRemoved(ComponentRemoved<T> handler)
+    {
+        BeforeRemoved += handler;
+        return new(World, this, handler, added: false);
+    }
+
+    // What a Subscription hands back on Dispose is the very delegate it got from the methods above.
+    internal override void RemoveAdded(Delegate handler) => AfterAdded -= (ComponentAdded<T>)handler;
+    internal override void RemoveRemoved(Delegate handler) => BeforeRemoved -= (ComponentRemoved<T>)handler;
 
     internal override void InvokeAdded(Aspect aspect, ReadOnlySpan<Entity> entities, TypeExpression expression)
     {

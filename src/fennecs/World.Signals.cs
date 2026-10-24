@@ -55,6 +55,14 @@ public partial class World
     }
 
 
+    // Subscriptions not yet disposed, so disposing the World can dispose them too.
+    private readonly HashSet<Subscription> _subscriptions = [];
+
+    internal void SubscriptionOpened(Subscription subscription) => _subscriptions.Add(subscription);
+
+    internal void SubscriptionClosed(Subscription subscription) => _subscriptions.Remove(subscription);
+
+
     // Recomputes the watch bits of one Component type from the Signals that cover it.
     private void Refresh(TypeID typeId)
     {
@@ -122,6 +130,20 @@ public partial class World
 
     internal void ResetSubscribers()
     {
+        // The World disposes what it handed out: those Subscriptions report inactive from now on.
+        foreach (var subscription in _subscriptions) subscription.Release();
+        _subscriptions.Clear();
+
+        // Subscriptions outliving the World must not count down a World that is gone.
+        foreach (var signals in _signals.Values)
+        {
+            foreach (var signal in signals) signal.Clear();
+        }
+        foreach (var reference in _idle.Values)
+        {
+            if (reference.TryGetTarget(out var signal)) signal.Clear();
+        }
+
         _subscribers = 0;
         SignalVersion++;
         _watch.SetAll(false);
@@ -179,8 +201,9 @@ public partial class World
     /// <remarks>
     /// <para>
     /// Signals are memoized per expression: calling this repeatedly returns the same instance.
-    /// Subscribe through this method every time — <b>do not store the returned
-    /// <see cref="Signal{T}"/></b>.
+    /// To subscribe a lambda, prefer <see cref="SubscribeAdded{T}(ComponentAdded{T})"/> /
+    /// <see cref="SubscribeRemoved{T}(ComponentRemoved{T})"/>: disposing the returned
+    /// <see cref="Subscription"/> unsubscribes it, where <c>-=</c> would need the very same delegate.
     /// </para>
     /// <para>
     /// <see cref="GC"/> drops every Signal left without subscribers from the World's registry, but
@@ -223,6 +246,39 @@ public partial class World
         signals.Add(signal);
         return signal;
     }
+
+
+    /// <summary>
+    /// Subscribes <paramref name="handler"/> to the <see cref="Signal{T}.AfterAdded"/> of plain Components
+    /// of type <typeparamref name="T"/>, until the returned <see cref="Subscription"/> is disposed.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// using var subscription = world.SubscribeAdded&lt;Position&gt;((entities, positions) => index.Insert(entities, positions));
+    /// </code>
+    /// </example>
+    public Subscription SubscribeAdded<T>(ComponentAdded<T> handler) where T : notnull => On<T>().SubscribeAdded(handler);
+
+    /// <inheritdoc cref="SubscribeAdded{T}(ComponentAdded{T})"/>
+    /// <param name="match"><inheritdoc cref="On{T}(Match)" path="/param[@name='match']"/></param>
+    /// <param name="handler">the handler to subscribe</param>
+    public Subscription SubscribeAdded<T>(Match match, ComponentAdded<T> handler) where T : notnull => On<T>(match).SubscribeAdded(handler);
+
+    /// <summary>
+    /// Subscribes <paramref name="handler"/> to the <see cref="Signal{T}.BeforeRemoved"/> of plain Components
+    /// of type <typeparamref name="T"/>, until the returned <see cref="Subscription"/> is disposed.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// using var subscription = world.SubscribeRemoved&lt;Position&gt;((entities, positions, cause) => index.Remove(entities));
+    /// </code>
+    /// </example>
+    public Subscription SubscribeRemoved<T>(ComponentRemoved<T> handler) where T : notnull => On<T>().SubscribeRemoved(handler);
+
+    /// <inheritdoc cref="SubscribeRemoved{T}(ComponentRemoved{T})"/>
+    /// <param name="match"><inheritdoc cref="On{T}(Match)" path="/param[@name='match']"/></param>
+    /// <param name="handler">the handler to subscribe</param>
+    public Subscription SubscribeRemoved<T>(Match match, ComponentRemoved<T> handler) where T : notnull => On<T>(match).SubscribeRemoved(handler);
 
     #endregion
 
