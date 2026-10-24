@@ -212,9 +212,9 @@ Measured over 10 000 Entities (.NET 10). First, what merely *having* Signals cos
 
 | Path                          | without Signals | with Signals, nobody subscribed |
 |-------------------------------|----------------:|--------------------------------:|
-| `Add` + `Remove`, per Entity  | 2.9 ms          | 3.1 ms (+4 to +9 %)             |
-| `Add` + `Remove`, via Batch   | 29 µs           | 29 µs (±0 %)                    |
-| Spawn + Despawn wave          | 0.36 ms         | 0.44 to 0.53 ms (+20 to +45 %)  |
+| `Add` + `Remove`, per Entity  | *baseline*      | ±0 to +8 %                      |
+| `Add` + `Remove`, via Batch   | *baseline*      | ±0 %                            |
+| Spawn + Despawn wave          | *baseline*      | ±0 %                            |
 
 Then, what the dispatch itself costs, against the same World with no subscriber (`SignalBenchmarks`):
 
