@@ -10,7 +10,7 @@ description: 'EntityRef is a lightweight Entity handle, used when the Entity is 
 *an Entity that already knows where it lives*
 
 ::: tip :neofox_thumbsup: You Don't Create These
-`EntityRef` is handed **to** you  –  by [Stream runners](/docs/Basic/Streams/Stream.For.md) and by [Signal handlers](/docs/Advanced/Events/index.md).
+`EntityRef` is handed **to** you by [Stream runners](/docs/Basic/Streams/Stream.For.md).
 Everywhere else, you work with the plain 64-bit [`Entity`](index.md).
 :::
 
@@ -26,7 +26,7 @@ That has two consequences, and they're the whole story:
 
 ## Why it's always alive
 
-Runners and Signal dispatch both hold a [World Lock](Liveness.md#manual-world-locking), so nothing can despawn or move an Entity while you hold its `EntityRef`. That's the guarantee that lets it skip the liveness check; `entity.Alive` inside a runner is `true` by construction.
+Runners hold a [World Lock](Liveness.md#manual-world-locking), so nothing can despawn or move an Entity while you hold its `EntityRef`. That's the guarantee that lets it skip the liveness check; `entity.Alive` inside a runner is `true` by construction.
 
 ::: warning :neofox_think: DEFERRED, NOT IGNORED
 A `Despawn()` (or `Remove`) you issue on an `EntityRef` is *queued*, not applied.
@@ -95,4 +95,3 @@ Because it can never be boxed, generic code reaches its interfaces through `wher
 
 1. [Liveness](Liveness.md)  –  the World Lock that makes an EntityRef safe
 2. [Stream Delegates](/docs/Basic/Streams/Delegates.md)  –  every runner shape that hands you one
-3. [Component Signals](/docs/Advanced/Events/index.md)  –  the other place they turn up
